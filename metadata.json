@@ -1,0 +1,5 @@
+{
+  "name": "Hearthstone Mulligan Sim",
+  "description": "A web-based visual Hearthstone simulator for testing deck consistency by mimicking opening hands and drawing.",
+  "requestFramePermissions": []
+}
