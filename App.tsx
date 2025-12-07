@@ -23,6 +23,8 @@ interface GameStateSnapshot {
   logs: string[];
   turnCount: number;
   manaSpentThisTurn: number;
+  manaThisTurn: number;  
+  totalMana: number;
 }
 
 interface ModalState {
@@ -46,7 +48,7 @@ const App: React.FC = () => {
 
   const [dbLoading, setDbLoading] = useState(true);
   const [deckString, setDeckString] = useState('');
-  const [deck, setDeck] = useState<DeckCard[]>([]);
+  //const [deck, setDeck] = useState<DeckCard[]>([]);
   const [flatDeck, setFlatDeck] = useState<CardData[]>([]);
   
   // Game State
@@ -57,6 +59,8 @@ const App: React.FC = () => {
   const [remainingDeck, setRemainingDeck] = useState<CardData[]>([]);
   const [turnCount, setTurnCount] = useState<number>(1);
   const [manaSpentThisTurn, setManaSpentThisTurn] = useState<number>(0);
+  const [manaThisTurn, setManaThisTurn] = useState<number>(0);
+  const [totalMana, setTotalMana] = useState<number>(0);
   
   // New Features State
   const [history, setHistory] = useState<GameStateSnapshot[]>([]);
@@ -92,7 +96,7 @@ const App: React.FC = () => {
         };
 
         // Update Deck Lists and Hand
-        setDeck(prev => prev.map(item => ({ ...item, card: refresh(item.card) })));
+        //setDeck(prev => prev.map(item => ({ ...item, card: refresh(item.card) })));
         setFlatDeck(prev => prev.map(c => refresh(c)));
         setHand(prev => prev.map(h => ({ ...h, card: refresh(h.card) })));
         setRemainingDeck(prev => prev.map(c => refresh(c)));
@@ -143,7 +147,7 @@ const App: React.FC = () => {
       }
     });
 
-    setDeck(newDeckList);
+    //setDeck(newDeckList);
     setFlatDeck(newFlatDeck);
     
     // Reset game state
@@ -154,8 +158,10 @@ const App: React.FC = () => {
     setShowTrueOrder(false);
     setLogs([]);
     setHistory([]);
-    setTurnCount(1);
+    setTurnCount(0);
     setManaSpentThisTurn(0);
+    setManaThisTurn(0);
+    setTotalMana(0);
   }, [deckString, dbLoading, t]);
 
   const addLog = (msg: string) => {
@@ -170,7 +176,9 @@ const App: React.FC = () => {
         remainingDeck: [...remainingDeck],
         logs: [...logs],
         turnCount: turnCount,
-        manaSpentThisTurn: manaSpentThisTurn
+        manaSpentThisTurn: manaSpentThisTurn,
+        manaThisTurn: manaThisTurn,
+        totalMana: totalMana
       }
     ]);
   };
@@ -182,8 +190,10 @@ const App: React.FC = () => {
     // Reset stuff
     setLogs([]);
     setHistory([]);
-    setTurnCount(1);
+    setTurnCount(0);
     setManaSpentThisTurn(0);
+    setManaThisTurn(0);
+    setTotalMana(0);
     uniqueIdCounter.current = 1000;
 
     // 1. Shuffle full deck
@@ -285,35 +295,69 @@ const App: React.FC = () => {
     setSelectedIndices(new Set());
     setTotalCount(prev => prev + 1);
     setManaSpentThisTurn(0);
+    setManaThisTurn(0);
+    setTotalMana(0);
     
-    const logMsg = t['msg_mulligan_done']
+
+    let historyArray = [];
+    let logArray = [];
+
+    logArray.push(finalHand.length == 3 ? t['msg_start_first'] : t['msg_start_second']);
+    let logMsg = t['msg_mulligan_done']
         .replace('{kept}', keptCards.length.toString())
         .replace('{swapped}', indicesToReplace.length.toString());
     addLog(logMsg);
-
-    // Initialize History for the post-mulligan state
-    setHistory([{
+    logArray.push(logMsg);
+            
+    historyArray.push({
       hand: finalHand,
       remainingDeck: currentDeck,
-      logs: [logMsg],
-      turnCount: 1,
-      manaSpentThisTurn: 0
-    }]);
+      logs: [logArray[0], logArray[1]],
+      turnCount: 0,
+      manaSpentThisTurn: 0,
+      manaThisTurn: 0,
+      totalMana: 0
+    });
+    // Initialize History for the post-mulligan state
+    setHistory(historyArray);
+
+    // Handle Start Turn
+    logMsg = t['msg_start_turn'].replace('{turn}', (turnCount + 1).toString());
+    setTurnCount(1);
+    setManaThisTurn(1);
+    setTotalMana(1);
+
+    if (remainingDeck.length == 0) {
+      // No Deck
+      addLog(logMsg);
+    }
+    else { 
+      // Handle Draw
+      const newDeck = [...currentDeck];
+      const card = newDeck.shift()!;
+      const newHand = [...finalHand, { card, originalIndex: uniqueIdCounter.current++ }];      
+      setRemainingDeck(newDeck);
+      setHand(newHand);
+
+      logMsg += t['msg_draw'].replace('{card}', card.name);
+      addLog(logMsg);
+    }
   };
 
   // --- Actions ---
 
   const handleUndo = () => {
-    if (history.length <= 1) return; // Keep the initial state
-    const newHistory = [...history];
-    newHistory.pop(); // Remove current state
-    const previousState = newHistory[newHistory.length - 1];
+    if (history.length == 0) return; // Keep the initial state
+    const newHistory = [...history];    
+    const previousState = newHistory.pop() as GameStateSnapshot; // Remove current state
 
     setHand(previousState.hand);
     setRemainingDeck(previousState.remainingDeck);
     setLogs(previousState.logs);
     setTurnCount(previousState.turnCount);
     setManaSpentThisTurn(previousState.manaSpentThisTurn);
+    setManaThisTurn(previousState.manaThisTurn);
+    setTotalMana(previousState.totalMana);
     setHistory(newHistory);
   };
 
@@ -346,12 +390,24 @@ const App: React.FC = () => {
     const typeName = t[`btn_${type.toLowerCase()}`];
     addLog(t['msg_draw_type'].replace('{type}', typeName).replace('{card}', card.name));
   };
-
+  
   const handleEndTurn = () => {
     saveHistory();
-    addLog(t['msg_end_turn'].replace('{turn}', turnCount.toString()).replace('{mana}', manaSpentThisTurn.toString()));
+    let logMsg = t['msg_start_turn'].replace('{turn}', (turnCount + 1).toString());
     setTurnCount(prev => prev + 1);
     setManaSpentThisTurn(0);
+    setManaThisTurn(_ => Math.min(totalMana + 1, 10));
+    setTotalMana(prev => Math.min(prev + 1, 10));
+
+    if (remainingDeck.length > 0) {
+      const newDeck = [...remainingDeck];
+      const card = newDeck.shift()!;
+      const newHand = [...hand, { card, originalIndex: uniqueIdCounter.current++ }];
+      setRemainingDeck(newDeck);
+      setHand(newHand);
+      logMsg += t['msg_draw'].replace('{card}', card.name);
+    }
+    addLog(logMsg);
   };
 
   const handlePlayCard = (index: number) => {
@@ -364,6 +420,18 @@ const App: React.FC = () => {
     setHand(newHand);
     
     setManaSpentThisTurn(prev => prev + cardItem.card.cost);
+    setManaThisTurn(prev => prev - cardItem.card.cost);
+
+    // Mana Gain
+    switch (cardItem.card.dbfId) {
+      case 1746: // Coin
+      case 40437: // Counterfeit Coin
+      case 69550: // Innervate
+      case 254: // Innervate
+      setManaThisTurn(prev => prev + 1);
+      break;
+    }
+
     addLog(t['msg_play'].replace('{card}', cardItem.card.name).replace('{cost}', cardItem.card.cost.toString()));
   };
 
@@ -921,7 +989,7 @@ const App: React.FC = () => {
                     {/* Hand Count and Mana Spent Info */}
                     <div className="flex justify-between items-center w-full px-2 mb-2 text-cyan-400 font-mono text-sm font-bold tracking-wider">
                         <span>{t['hand_count']}: {hand.length}</span>
-                        <span>{t['mana_spent']}: {manaSpentThisTurn}</span>
+                        <span>{t['mana_this_turn']}: {manaThisTurn}</span>
                     </div>
 
                     {/* Action Dashboard */}
@@ -929,7 +997,7 @@ const App: React.FC = () => {
                         {/* Undo */}
                         <button 
                              onClick={handleUndo}
-                             disabled={history.length <= 1}
+                             disabled={history.length == 0}
                              className="h-full bg-gray-600 hover:bg-gray-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-bold rounded-lg shadow-[0_4px_0_#374151] active:shadow-none active:translate-y-1 flex flex-col items-center justify-center gap-1"
                         >
                             <span className="text-2xl">↩</span>
@@ -1053,7 +1121,7 @@ const App: React.FC = () => {
                         const index = isLogDesc ? logs.length - i : i + 1;
                         return (
                             <div key={i} className="py-0.5 border-b border-[#221812] last:border-0 hover:bg-[#1a1410] px-1">
-                                <span className="text-gray-500 mr-2">[{index}]</span>
+                                <span className="text-gray-500 mr-2">[{index.toString().padStart(2, '0')}]</span>
                                 {log}
                             </div>
                         );
