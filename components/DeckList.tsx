@@ -30,6 +30,8 @@ export const DeckList: React.FC<DeckListProps> = ({
 }) => {
   const [hoveredCard, setHoveredCard] = useState<CardData | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [sortDesc, setSortDesc] = useState(false);
+  
   const t = translations[lang];
   const locale = getHSLocale(lang);
   
@@ -37,11 +39,19 @@ export const DeckList: React.FC<DeckListProps> = ({
   const displayItems = useMemo(() => {
     if (showTrueOrder) {
       // Return flat list with an index key to handle duplicates in specific positions
-      return cards.map((card, index) => ({
+      // We map original index here so that when we reverse, we still show the correct "Deck Position"
+      let list = cards.map((card, index) => ({
         card,
         count: 1,
-        key: `${card.dbfId}-${index}` // Unique key for flat list
+        key: `${card.dbfId}-${index}`,
+        realIndex: index // Track the actual 0-based index in the deck
       }));
+
+      if (sortDesc) {
+        list.reverse();
+      }
+      
+      return list;
     } else {
       // Group by ID and Sort (Classic View)
       const map = new Map<number, DeckCard>();
@@ -57,16 +67,20 @@ export const DeckList: React.FC<DeckListProps> = ({
 
       const grouped = Array.from(map.values());
 
-      // Sort: Cost ASC, then Name ASC
+      // Sort: Cost ASC/DESC, then Name ASC
       return grouped.sort((a, b) => {
-        if (a.card.cost !== b.card.cost) return a.card.cost - b.card.cost;
+        const costDiff = sortDesc 
+            ? b.card.cost - a.card.cost 
+            : a.card.cost - b.card.cost;
+        
+        if (costDiff !== 0) return costDiff;
         return a.card.name.localeCompare(b.card.name);
       }).map(item => ({
         ...item,
         key: item.card.dbfId // DBF ID is unique enough for grouped list
       }));
     }
-  }, [cards, showTrueOrder]);
+  }, [cards, showTrueOrder, sortDesc]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
     setTooltipPos({ x: e.clientX, y: e.clientY });
@@ -127,18 +141,29 @@ export const DeckList: React.FC<DeckListProps> = ({
           </span>
         </h2>
         
-        {/* True Order Toggle - Only visible during simulation */}
-        {isSimulation && onToggleTrueOrder && (
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input 
-              type="checkbox" 
-              checked={showTrueOrder} 
-              onChange={onToggleTrueOrder}
-              className="w-4 h-4 accent-[#fcd144] bg-[#15100c] border-[#3d2b1f] rounded focus:ring-[#fcd144]"
-            />
-            <span className="text-sm text-[#e0e0e0] font-bold">{t['show_order']}</span>
-          </label>
-        )}
+        <div className="flex items-center gap-3">
+            {/* Sort Order Toggle */}
+            <button
+                onClick={() => setSortDesc(!sortDesc)}
+                className="w-6 h-6 flex items-center justify-center bg-[#3d2b1f] rounded text-sm hover:bg-[#555555] text-[#fcd144] active:translate-y-0.5 transition-all"
+                title={sortDesc ? "Sort Descending" : "Sort Ascending"}
+            >
+                {sortDesc ? "⬇️" : "⬆️"}
+            </button>
+
+            {/* True Order Toggle - Only visible during simulation */}
+            {isSimulation && onToggleTrueOrder && (
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input 
+                type="checkbox" 
+                checked={showTrueOrder} 
+                onChange={onToggleTrueOrder}
+                className="w-4 h-4 accent-[#fcd144] bg-[#15100c] border-[#3d2b1f] rounded focus:ring-[#fcd144]"
+                />
+                <span className="text-sm text-[#e0e0e0] font-bold">{t['show_order']}</span>
+            </label>
+            )}
+        </div>
       </div>
       
       <div className="flex-1 overflow-y-auto space-y-2 pr-1">
@@ -170,7 +195,8 @@ export const DeckList: React.FC<DeckListProps> = ({
             {/* Index Indicator for True Order */}
             {showTrueOrder && (
                <div className="flex items-center justify-center w-6 h-full bg-[#1a1410] text-gray-500 text-xs font-mono border-r border-[#3d2b1f]">
-                 {index + 1}
+                 {/* Use realIndex if available (TrueOrder mode), otherwise fallback to index */}
+                 {((item as any).realIndex !== undefined ? (item as any).realIndex : index) + 1}
                </div>
             )}
 
