@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { decodeDeckString } from './services/deckDecoder';
 import { initializeCardDatabase, getCardByDbfId, getCoinCard } from './services/cardService';
-import { DeckCard, CardData, HandCard, MulliganPhase, PlayerTurn, Language } from './types';
+import { 
+  DeckCard, CardData, HandCard, MulliganPhase, PlayerTurn, Language, 
+  GameStateSnapshot, InteractionStrategy, InteractionOption
+} from './types';
 import { DeckList } from './components/DeckList';
 import { CardDisplay } from './components/CardDisplay';
 import { translations } from './utils/translations';
+import { DiscoverStrategy, DredgeStrategy, FrackingStrategy, WaveshapingStrategy, PickTwoStrategy } from './services/interactionStrategies';
 
 // Shuffle Utility
 function shuffleArray<T>(array: T[]): T[] {
@@ -16,23 +20,10 @@ function shuffleArray<T>(array: T[]): T[] {
   return arr;
 }
 
-// History State Interface
-interface GameStateSnapshot {
-  hand: HandCard[];
-  remainingDeck: CardData[];
-  logs: string[];
-  turnCount: number;
-  manaSpentThisTurn: number;
-  manaThisTurn: number;  
-  totalMana: number;
-}
-
 interface ModalState {
   isOpen: boolean;
-  type: 'DISCOVER' | 'DREDGE' | null;
-  cards: CardData[];
-  indices?: number[]; // To track original deck indices for Discover
-  discoverType?: string; // To track if a specific type filter was used for logging
+  strategy: InteractionStrategy | null; // The active logic controller
+  options: InteractionOption[];         // The current choices
 }
 
 // Drag State Interface
@@ -65,7 +56,7 @@ const App: React.FC = () => {
   // New Features State
   const [history, setHistory] = useState<GameStateSnapshot[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
-  const [modal, setModal] = useState<ModalState>({ isOpen: false, type: null, cards: [] });
+  const [modal, setModal] = useState<ModalState>({ isOpen: false, strategy: null, options: [] });
   const uniqueIdCounter = useRef(1000); // For generating unique keys for new cards
   const logContainerRef = useRef<HTMLDivElement>(null);
 
@@ -168,19 +159,30 @@ const App: React.FC = () => {
     setLogs(prev => [...prev, msg]);
   };
 
+  // Helper to get current state snapshot
+  const getCurrentStateSnapshot = (): GameStateSnapshot => ({
+    hand: [...hand],
+    remainingDeck: [...remainingDeck],
+    logs: [...logs],
+    turnCount: turnCount,
+    manaSpentThisTurn: manaSpentThisTurn,
+    manaThisTurn: manaThisTurn,
+    totalMana: totalMana
+  });
+
+  // Helper to update React state from a snapshot
+  const applyStateSnapshot = (snapshot: GameStateSnapshot) => {
+    setHand(snapshot.hand);
+    setRemainingDeck(snapshot.remainingDeck);
+    setLogs(snapshot.logs);
+    setTurnCount(snapshot.turnCount);
+    setManaSpentThisTurn(snapshot.manaSpentThisTurn);
+    setManaThisTurn(snapshot.manaThisTurn);
+    setTotalMana(snapshot.totalMana);
+  };  
+
   const saveHistory = () => {
-    setHistory(prev => [
-      ...prev,
-      {
-        hand: [...hand],
-        remainingDeck: [...remainingDeck],
-        logs: [...logs],
-        turnCount: turnCount,
-        manaSpentThisTurn: manaSpentThisTurn,
-        manaThisTurn: manaThisTurn,
-        totalMana: totalMana
-      }
-    ]);
+    setHistory(prev => [...prev, getCurrentStateSnapshot()]);
   };
 
   // Start Simulation
@@ -350,14 +352,7 @@ const App: React.FC = () => {
     if (history.length == 0) return; // Keep the initial state
     const newHistory = [...history];    
     const previousState = newHistory.pop() as GameStateSnapshot; // Remove current state
-
-    setHand(previousState.hand);
-    setRemainingDeck(previousState.remainingDeck);
-    setLogs(previousState.logs);
-    setTurnCount(previousState.turnCount);
-    setManaSpentThisTurn(previousState.manaSpentThisTurn);
-    setManaThisTurn(previousState.manaThisTurn);
-    setTotalMana(previousState.totalMana);
+    applyStateSnapshot(previousState);
     setHistory(newHistory);
   };
 
@@ -412,70 +407,35 @@ const App: React.FC = () => {
 
   const handlePlayCard = (index: number) => {
     saveHistory();
-    const cardItem = hand[index];
+    const newState = getCurrentStateSnapshot();
     
     // Remove from hand
-    const newHand = [...hand];
-    newHand.splice(index, 1);
-    setHand(newHand);
-    
-    setManaSpentThisTurn(prev => prev + cardItem.card.cost);
-    setManaThisTurn(prev => prev - cardItem.card.cost);
+    const cardItem = newState.hand[index];
+    newState.hand.splice(index, 1);
+    newState.logs.push(t['msg_play'].replace('{card}', cardItem.card.name).replace('{cost}', cardItem.card.cost.toString()));
 
-    // Mana Gain
+    newState.manaSpentThisTurn += cardItem.card.cost;
+    newState.manaThisTurn -= cardItem.card.cost;    
+
+    // Apply card effect
     switch (cardItem.card.dbfId) {
       case 1746: // Coin
       case 40437: // Counterfeit Coin
       case 69550: // Innervate
       case 254: // Innervate
-      setManaThisTurn(prev => prev + 1);
-      break;
+        newState.manaThisTurn += 1; break;
+
+      case 102148: // Fracking
+        startInteraction(new FrackingStrategy()); break;
+
+      case 117697: // Cultist Map
+        startInteraction(new PickTwoStrategy()); break;
+
+      case 120746: // Waveshaping
+        startInteraction(new WaveshapingStrategy()); break;
     }
 
-    addLog(t['msg_play'].replace('{card}', cardItem.card.name).replace('{cost}', cardItem.card.cost.toString()));
-  };
-
-  const handleDiscover = (filterType?: string) => {
-    if (remainingDeck.length === 0) return;
-    
-    // 1. Create a list of available indices, filtering by type if needed
-    let poolIndices = remainingDeck.map((_, i) => i);
-    
-    if (filterType) {
-        poolIndices = poolIndices.filter(i => remainingDeck[i].type === filterType);
-        if (poolIndices.length === 0) {
-            alert(t['msg_no_type'].replace('{type}', t[`btn_${filterType.toLowerCase()}`]));
-            return;
-        }
-    }
-
-    // 2. Shuffle indices to randomize search order
-    const shuffledIndices = shuffleArray(poolIndices);
-
-    const selectedIndices: number[] = [];
-    const seenIds = new Set<number>();
-
-    // 3. Find up to 3 cards with unique IDs
-    for (const idx of shuffledIndices) {
-      if (selectedIndices.length >= 3) break;
-      const card = remainingDeck[idx];
-      if (!seenIds.has(card.dbfId)) {
-        seenIds.add(card.dbfId);
-        selectedIndices.push(idx);
-      }
-    }
-
-    // If we couldn't find 3 unique IDs, we show what we found.
-    const cards = selectedIndices.map(i => remainingDeck[i]);
-
-    setModal({ isOpen: true, type: 'DISCOVER', cards, indices: selectedIndices, discoverType: filterType });
-  };
-
-  const handleDredge = () => {
-    if (remainingDeck.length === 0) return;
-    // Look at bottom 3
-    const cards = remainingDeck.slice(-3).reverse(); 
-    setModal({ isOpen: true, type: 'DREDGE', cards });
+    applyStateSnapshot(newState);
   };
 
   const handleShuffle = () => {
@@ -516,57 +476,67 @@ const App: React.FC = () => {
     addLog(t['msg_swap'].replace('{count}', count.toString()));
   };
 
-  const onModalSelect = (selectedCard: CardData, selectionIndex: number) => {
-    saveHistory();
-    const currentDeck = [...remainingDeck];
-    
-    if (modal.type === 'DISCOVER') {
-      // Remove specific instance from deck
-      if (modal.indices) {
-        const deckIndexToRemove = modal.indices[selectionIndex];
-        
-        if (typeof deckIndexToRemove === 'number' && deckIndexToRemove < currentDeck.length) {
-            currentDeck.splice(deckIndexToRemove, 1);
-        }
+  // --- Generic Interaction Handler ---
+  
+  const startInteraction = (strategy: InteractionStrategy) => {
+    const snapshot = getCurrentStateSnapshot();
+    const options = strategy.getOptions(snapshot);
 
-        setHand([...hand, { card: selectedCard, originalIndex: uniqueIdCounter.current++ }]);
-        setRemainingDeck(currentDeck);
-        
-        if (modal.discoverType) {
-            const typeName = t[`btn_${modal.discoverType.toLowerCase()}`];
-            addLog(t['msg_discover_type'].replace('{type}', typeName).replace('{card}', selectedCard.name));
-        } else {
-            addLog(t['msg_discover'].replace('{card}', selectedCard.name));
-        }
-      }
-    
-    } else if (modal.type === 'DREDGE') {
-      const deckLen: number = currentDeck.length;
-      const dredgeCount: number = Math.min(3, deckLen);
-      const startIndex: number = deckLen - dredgeCount;
-      const bottomCards = currentDeck.splice(startIndex, dredgeCount);
-      
-      const selectedIndex = bottomCards.indexOf(selectedCard);
-      if (selectedIndex > -1) {
-        bottomCards.splice(selectedIndex, 1);
-      }
-      
-      currentDeck.unshift(selectedCard);
-      currentDeck.push(...bottomCards);
-
-      setRemainingDeck(currentDeck);
-      addLog(t['msg_dredge'].replace('{card}', selectedCard.name));
+    if (options.length === 0) {
+        // Handle empty options (e.g., trying to draw a specific type that doesn't exist)
+        const typeKey = strategy instanceof DiscoverStrategy ? 'btn_minion' : 'cards'; 
+        // Note: Simple alert fallback. In a real app, Strategy could return an error message.
+        alert(t['msg_no_type'].replace('{type}', typeKey)); 
+        return;
     }
 
-    setModal({ isOpen: false, type: null, cards: [], indices: [] });
+    setModal({
+        isOpen: true,
+        strategy: strategy,
+        options: options
+    });
   };
 
-  const handleDiscoverCopy = (selectedCard: CardData) => {
+  const handleInteractionResolve = (option: InteractionOption, actionType: string) => {
+    if (!modal.strategy) return;
     saveHistory();
-    // Add a copy of the card to hand, leave deck untouched
-    setHand([...hand, { card: selectedCard, originalIndex: uniqueIdCounter.current++ }]);
-    addLog(t['msg_discover_copy'].replace('{card}', selectedCard.name));
-    setModal({ isOpen: false, type: null, cards: [], indices: [] });
+
+    const snapshot = getCurrentStateSnapshot();
+    
+    // Delegate logic to the Strategy
+    const newState = modal.strategy.resolve(
+        snapshot, 
+        option, 
+        actionType, 
+        () => uniqueIdCounter.current++ // Pass ID generator
+    );
+    newState.logs.push(t[modal.strategy.getLogKey()].replace('{card}', option.card.name));
+
+    // Check for follow-up strategy BEFORE applying state
+    // We need to pass the *selectedOption* so the strategy knows what happened.
+    const nextStrategy = modal.strategy.getFollowUpStrategy?.(option);
+
+    applyStateSnapshot(newState);
+
+    if (nextStrategy) {
+      // If there is a next step, trigger it immediately
+      // We must re-calculate options based on the NEW state we just applied
+      const nextOptions = nextStrategy.getOptions(newState);
+      
+      if (nextOptions.length === 0) {
+         // Fallback if something went wrong or deck empty
+         setModal({ isOpen: false, strategy: null, options: [] });
+      } else {
+         setModal({
+             isOpen: true,
+             strategy: nextStrategy,
+             options: nextOptions
+         });
+      }
+    } else {
+        // No follow-up, close modal
+        setModal({ isOpen: false, strategy: null, options: [] });
+    }
   };
 
   // --- Drag and Drop Handlers ---
@@ -1011,10 +981,10 @@ const App: React.FC = () => {
                             <span className="text-sm">{t['undo']}</span>
                         </button>
                         
-                        {/* Dredge & Swap (Group) */}
+                        {/* Dredge & Swap */}
                         <div className="flex flex-col gap-1 h-full">
                             <button 
-                                onClick={handleDredge}
+                                onClick={() => startInteraction(new DredgeStrategy())}
                                 disabled={remainingDeck.length === 0}
                                 className="flex-1 bg-[#8b4513] hover:bg-[#a0522d] disabled:opacity-30 text-white font-bold rounded-lg shadow-[0_2px_0_#5e2f0d] active:shadow-none active:translate-y-0.5 flex flex-col items-center justify-center gap-0.5"
                             >
@@ -1042,7 +1012,7 @@ const App: React.FC = () => {
                         {/* Discover (Group) */}
                         <div className="flex flex-col gap-1 h-full">
                             <button 
-                                onClick={() => handleDiscover()}
+                                onClick={() => startInteraction(new DiscoverStrategy())} // Usage: Generic Discover
                                 disabled={remainingDeck.length === 0}
                                 className="flex-1 bg-[#008b8b] hover:bg-[#20b2aa] disabled:opacity-30 text-white font-bold rounded-lg shadow-[0_2px_0_#005f5f] active:shadow-none active:translate-y-0.5 flex flex-col items-center justify-center gap-0.5"
                             >
@@ -1051,14 +1021,14 @@ const App: React.FC = () => {
                             </button>
                             <div className="flex gap-1 h-8">
                                 <button 
-                                    onClick={() => handleDiscover('MINION')}
+                                    onClick={() => startInteraction(new DiscoverStrategy('MINION'))} // Usage: Type Filter
                                     disabled={remainingDeck.length === 0}
                                     className="flex-1 bg-[#006f6f] hover:bg-[#008b8b] disabled:opacity-30 text-white text-xs font-bold rounded shadow-[0_1px_0_#004f4f] active:shadow-none active:translate-y-0.5"
                                 >
                                     {t['btn_minion']}
                                 </button>
                                 <button 
-                                    onClick={() => handleDiscover('SPELL')}
+                                    onClick={() => startInteraction(new DiscoverStrategy('SPELL'))} // Usage: Type Filter
                                     disabled={remainingDeck.length === 0}
                                     className="flex-1 bg-[#006f6f] hover:bg-[#008b8b] disabled:opacity-30 text-white text-xs font-bold rounded shadow-[0_1px_0_#004f4f] active:shadow-none active:translate-y-0.5"
                                 >
@@ -1180,42 +1150,52 @@ const App: React.FC = () => {
       )}
 
       {/* Modal Overlay */}
-      {modal.isOpen && (
+      {modal.isOpen && modal.strategy && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
            <div className="bg-[#2b221a] border-2 border-[#5c4028] rounded-xl p-6 w-full max-w-4xl shadow-2xl relative">
               <h2 className="text-2xl font-bold text-[#fcd144] text-center mb-6">
-                 {modal.type === 'DISCOVER' ? t['modal_discover'] : t['modal_dredge']}
+                 {/* Dynamically get title from Strategy */}
+                 {t[modal.strategy.getTitleKey()]}
               </h2>
               <p className="text-center text-gray-400 mb-6">
-                 {modal.type === 'DISCOVER' ? t['modal_discover_desc'] : t['modal_dredge_desc']}
+                 {/* Dynamically get description from Strategy */}
+                 {t[modal.strategy.getDescriptionKey()]}
               </p>
               
               <div className="flex flex-wrap justify-center gap-6">
-                  {modal.cards.map((card, i) => (
-                      <div key={i} className="flex flex-col items-center gap-3">
+                  {modal.options.map((option, i) => (
+                      <div key={option.id} className="flex flex-col items-center gap-3">
                           <CardDisplay 
-                            card={card} 
-                            onClick={() => onModalSelect(card, i)}
+                            card={option.card} 
+                            // Default click action can be the first action in the list
+                            onClick={() => {
+                                const defaultAction = modal.strategy?.getActions()[0];
+                                if (defaultAction) handleInteractionResolve(option, defaultAction.actionType);
+                            }}
                             lang={lang}
                           />
-                          <button 
-                             onClick={() => {
-                                if (modal.type === 'DISCOVER') {
-                                    handleDiscoverCopy(card);
-                                } else {
-                                    onModalSelect(card, i);
-                                }
-                             }}
-                             className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded shadow text-sm font-bold"
-                          >
-                             {modal.type === 'DISCOVER' ? t['btn_add_copy'] : t['select']}
-                          </button>
+                          
+                          {/* Render dynamic buttons defined by the Strategy */}
+                          <div className="flex gap-2">
+                            {modal.strategy?.getActions().map((action, actionIdx) => (
+                                <button 
+                                    key={actionIdx}
+                                    onClick={() => handleInteractionResolve(option, action.actionType)}
+                                    className={`
+                                        px-4 py-2 rounded shadow text-sm font-bold text-white
+                                        ${action.style === 'primary' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-600 hover:bg-gray-500'}
+                                    `}
+                                >
+                                    {t[action.labelKey]}
+                                </button>
+                            ))}
+                          </div>
                       </div>
                   ))}
               </div>
 
               <button 
-                 onClick={() => setModal({ isOpen: false, type: null, cards: [], indices: [] })}
+                 onClick={() => setModal({ isOpen: false, strategy: null, options: [] })}
                  className="absolute top-4 right-4 text-gray-400 hover:text-white text-xl font-bold"
               >
                  ✕
