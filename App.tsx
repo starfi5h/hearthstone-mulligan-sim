@@ -478,6 +478,13 @@ const App: React.FC = () => {
     setModal({ isOpen: true, type: 'DREDGE', cards });
   };
 
+  const handleShuffle = () => {
+    if (remainingDeck.length === 0) return;
+    saveHistory();
+    setRemainingDeck(prev => shuffleArray([...prev]));
+    addLog(t['msg_shuffle']);
+  }
+
   const handleSwap = () => {
     if (hand.length === 0) return; // Requirement implies X is hand length. If 0, nothing to swap.
     saveHistory();
@@ -1014,13 +1021,22 @@ const App: React.FC = () => {
                                 <span className="text-xl">⚓</span>
                                 <span className="text-xs">{t['dredge']}</span>
                             </button>
-                            <button 
-                                onClick={handleSwap}
-                                disabled={hand.length === 0}
-                                className="h-8 bg-[#5e2f0d] hover:bg-[#8b4513] disabled:opacity-30 text-white text-xs font-bold rounded shadow-[0_1px_0_#3d1f08] active:shadow-none active:translate-y-0.5"
-                            >
-                                {t['swap']}
-                            </button>
+                            <div className="flex gap-1 h-8">
+                              <button 
+                                  onClick={handleShuffle}
+                                  disabled={hand.length === 0}
+                                  className="flex-1 bg-[#5e2f0d] hover:bg-[#8b4513] disabled:opacity-30 text-white text-xs font-bold rounded shadow-[0_1px_0_#3d1f08] active:shadow-none active:translate-y-0.5"
+                              >
+                                  {t['shuffle']}
+                              </button>
+                              <button 
+                                  onClick={handleSwap}
+                                  disabled={hand.length === 0}
+                                  className="flex-1 bg-[#5e2f0d] hover:bg-[#8b4513] disabled:opacity-30 text-white text-xs font-bold rounded shadow-[0_1px_0_#3d1f08] active:shadow-none active:translate-y-0.5"
+                              >
+                                  {t['swap']}
+                              </button>
+                            </div>
                         </div>
 
                         {/* Discover (Group) */}
