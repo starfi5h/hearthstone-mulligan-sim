@@ -464,6 +464,8 @@ const App: React.FC = () => {
     applyStateSnapshot(newState);
   };
 
+  const HIGHLIGHT_DBFIDS = new Set([60278, 78144, 102148, 117697, 120746]);
+
   const handleShuffle = () => {
     if (remainingDeck.length === 0) return;
     saveHistory();
@@ -970,6 +972,7 @@ const App: React.FC = () => {
                                     disabled={false}
                                     onClick={() => handlePlayCard(idx)}
                                     lang={lang}
+                                    hasEffect={HIGHLIGHT_DBFIDS.has(cardItem.card.dbfId)}
                                 />
                             </div>
                         ))}

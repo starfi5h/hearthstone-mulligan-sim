@@ -7,6 +7,7 @@ interface CardDisplayProps {
   onClick?: () => void;
   disabled?: boolean;
   lang?: Language;
+  hasEffect?: boolean;
 }
 
 export const CardDisplay: React.FC<CardDisplayProps> = ({ 
@@ -14,7 +15,8 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
   selected, 
   onClick, 
   disabled, 
-  lang = 'zh-TW' 
+  lang = 'zh-TW',
+  hasEffect = false
 }) => {
   // Map App Language to Hearthstone API Locale
   const getHsLocale = (l: Language) => {
@@ -36,6 +38,7 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
         transition-all duration-200 transform
         ${!disabled ? 'cursor-pointer hover:scale-105' : 'cursor-default'}
         ${selected ? 'ring-4 ring-red-600 rounded-xl translate-y-2 grayscale' : ''}
+        ${hasEffect ? 'hover:ring-4 rounded-xl ring-green-400' : ''}
       `}
     >
       {/* Card Image */}
