@@ -34,12 +34,19 @@ interface DraggingItem {
 }
 
 const App: React.FC = () => {
-  const [lang, setLang] = useState<Language>('en');
+  const STORAGE_KEY_LANG = 'hs_sim_lang';
+  const STORAGE_KEY_DECK = 'hs_sim_deck';
+  
+  const [lang, setLang] = useState<Language>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_LANG);
+    return (saved === 'zh-TW' || saved === 'zh-CN' || saved === 'en') ? (saved as Language) : 'en';
+  });
   const t = translations[lang];
 
   const [dbLoading, setDbLoading] = useState(true);
-  const [deckString, setDeckString] = useState('');
-  //const [deck, setDeck] = useState<DeckCard[]>([]);
+  const [deckString, setDeckString] = useState(() => {
+    return localStorage.getItem(STORAGE_KEY_DECK) || '';
+  });
   const [flatDeck, setFlatDeck] = useState<CardData[]>([]);
   
   // Game State
@@ -75,6 +82,7 @@ const App: React.FC = () => {
 
   // Init DB and Handle Language Switch
   useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_LANG, lang);
     setDbLoading(true);
     initializeCardDatabase(lang)
       .then(() => {
@@ -87,7 +95,6 @@ const App: React.FC = () => {
         };
 
         // Update Deck Lists and Hand
-        //setDeck(prev => prev.map(item => ({ ...item, card: refresh(item.card) })));
         setFlatDeck(prev => prev.map(c => refresh(c)));
         setHand(prev => prev.map(h => ({ ...h, card: refresh(h.card) })));
         setRemainingDeck(prev => prev.map(c => refresh(c)));
@@ -116,8 +123,13 @@ const App: React.FC = () => {
   const handleLoadDeck = useCallback(() => {
     if (dbLoading) return;
     if (!deckString.trim()) return;
+    const processedDeckString = deckString
+      .split('#')
+      .filter(line => line.trim().startsWith('AAE'))
+      .join()
+      .trim();
 
-    const decoded = decodeDeckString(deckString.trim());
+    const decoded = decodeDeckString(processedDeckString);
     if (!decoded) {
       alert(t['msg_invalid_deck']);
       return;
@@ -153,6 +165,14 @@ const App: React.FC = () => {
     setManaSpentThisTurn(0);
     setManaThisTurn(0);
     setTotalMana(0);
+
+    // Save deck code to persistent storage
+    try {
+      window.localStorage.setItem(STORAGE_KEY_DECK, processedDeckString);
+      setDeckString(processedDeckString);
+    } catch (error) {
+      console.log('Failed to save deck code:', error);
+    }
   }, [deckString, dbLoading, t]);
 
   const addLog = (msg: string) => {
@@ -425,6 +445,12 @@ const App: React.FC = () => {
       case 254: // Innervate
         newState.manaThisTurn += 1; break;
 
+      case 60278: // Lorekeeper Polkelt
+      case 78144: // Order in the Court
+        newState.remainingDeck = newState.remainingDeck.sort((a, b) => (b.cost - a.cost));
+        newState.logs.push(t['msg_reoder_desc']);
+        break;
+
       case 102148: // Fracking
         startInteraction(new FrackingStrategy()); break;
 
@@ -584,7 +610,7 @@ const App: React.FC = () => {
       if (draggingItem?.type === 'DECK') {
           text = t['action_search'];
       } else if (draggingItem?.type === 'HAND') {
-          text = t['action_cancel'];
+          text = t['action_drag_guide'];
       }
       
       setDragTooltip({
@@ -600,7 +626,7 @@ const App: React.FC = () => {
       if (draggingItem?.type === 'HAND') {
           text = t['action_sink'];
       } else if (draggingItem?.type === 'DECK') {
-          text = t['action_cancel'];
+          text = t['action_drag_guide'];
       }
       setDragTooltip({
           visible: true,
@@ -706,19 +732,20 @@ const App: React.FC = () => {
     if (phase === 'selection') return {};
 
     const CARD_WIDTH = 128;
+    const CARD_GAP = 10; // 緊湊排列時的間距
     const CONTAINER_WIDTH = Math.min(800, window.innerWidth - 64);
     
-    let step = CARD_WIDTH + 10;
-    const totalRequiredWidth = (total * CARD_WIDTH) + ((total - 1) * 10);
-    
-    if (totalRequiredWidth > CONTAINER_WIDTH) {
-        step = (CONTAINER_WIDTH - CARD_WIDTH) / (total - 1);
+    const compactWidth = (total * CARD_WIDTH) + ((total - 1) * CARD_GAP);    
+    let step: number;
+    let stackWidth: number;    
+    if (compactWidth <= CONTAINER_WIDTH) {
+        step = CARD_WIDTH + CARD_GAP;
+        stackWidth = compactWidth;
     } else {
-        step = Math.min(100, step);
-    }
-    
-    const stackWidth = (total - 1) * step + CARD_WIDTH;
-    const startX = (CONTAINER_WIDTH - stackWidth) / 2;
+        step = (CONTAINER_WIDTH - CARD_WIDTH) / (total - 1);
+        stackWidth = (total - 1) * step + CARD_WIDTH;
+    }    
+    const startX = (CONTAINER_WIDTH - stackWidth) / 2 - 32;
 
     return {
         position: 'absolute' as const,
