@@ -9,6 +9,7 @@ import { DeckList } from './components/DeckList';
 import { CardDisplay } from './components/CardDisplay';
 import { translations } from './utils/translations';
 import { DiscoverStrategy, DredgeStrategy, FrackingStrategy, WaveshapingStrategy, PickTwoStrategy } from './services/interactionStrategies';
+import { swapAction } from './services/cardEffect';
 
 // Shuffle Utility
 function shuffleArray<T>(array: T[]): T[] {
@@ -48,21 +49,24 @@ const App: React.FC = () => {
     return localStorage.getItem(STORAGE_KEY_DECK) || '';
   });
   const [flatDeck, setFlatDeck] = useState<CardData[]>([]);
-  
-  // Game State
-  const [hand, setHand] = useState<HandCard[]>([]);
+
+  // Global State
   const [phase, setPhase] = useState<MulliganPhase>('idle');
   const [turnType, setTurnType] = useState<PlayerTurn | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [manaMaximum, setManaMaximum] = useState<number>(10);
+
+  // Record Game State (history and redo)
+  const [history, setHistory] = useState<GameStateSnapshot[]>([]);
+  const [hand, setHand] = useState<HandCard[]>([]);
   const [remainingDeck, setRemainingDeck] = useState<CardData[]>([]);
+  const [logs, setLogs] = useState<string[]>([]);
   const [turnCount, setTurnCount] = useState<number>(1);
   const [manaSpentThisTurn, setManaSpentThisTurn] = useState<number>(0);
   const [manaThisTurn, setManaThisTurn] = useState<number>(0);
-  const [totalMana, setTotalMana] = useState<number>(0);
+  const [totalMana, setTotalMana] = useState<number>(0);  
   
-  // New Features State
-  const [history, setHistory] = useState<GameStateSnapshot[]>([]);
-  const [logs, setLogs] = useState<string[]>([]);
+  // Features State
   const [modal, setModal] = useState<ModalState>({ isOpen: false, strategy: null, options: [] });
   const uniqueIdCounter = useRef(1000); // For generating unique keys for new cards
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -150,9 +154,13 @@ const App: React.FC = () => {
       }
     });
 
-    //setDeck(newDeckList);
     setFlatDeck(newFlatDeck);
-    
+    let maxMana = 10;
+    newFlatDeck.forEach((card) => {
+      if (card.dbfId == 113321) maxMana = 15; // Ysera, Emerald Aspect
+    });
+    setManaMaximum(maxMana);
+
     // Reset game state
     setHand([]);
     setPhase('idle');
@@ -405,29 +413,35 @@ const App: React.FC = () => {
     const typeName = t[`btn_${type.toLowerCase()}`];
     addLog(t['msg_draw_type'].replace('{type}', typeName).replace('{card}', card.name));
   };
+
+  const handleRamp = () => {
+    saveHistory();
+    let newMana = Math.min(totalMana + 1, );
+    setTotalMana(newMana);
+    addLog(t['msg_ramp'].replace('{mana}', newMana.toString()));
+  }
   
   const handleEndTurn = () => {
     saveHistory();
-    let logMsg = t['msg_start_turn'].replace('{turn}', (turnCount + 1).toString());
-    setTurnCount(prev => prev + 1);
-    setManaSpentThisTurn(0);
-    setManaThisTurn(_ => Math.min(totalMana + 1, 10));
-    setTotalMana(prev => Math.min(prev + 1, 10));
+    const newState = getCurrentStateSnapshot();
+    newState.turnCount++;
+    newState.manaSpentThisTurn = 0;
+    if (newState.totalMana < manaMaximum) newState.totalMana++;
+    newState.manaThisTurn = newState.totalMana;
+    let logMsg = t['msg_start_turn'].replace('{turn}', (newState.turnCount).toString());
 
-    if (remainingDeck.length > 0) {
-      const newDeck = [...remainingDeck];
-      const card = newDeck.shift()!;
-      const newHand = [...hand, { card, originalIndex: uniqueIdCounter.current++ }];
-      setRemainingDeck(newDeck);
-      setHand(newHand);
+    if (newState.remainingDeck.length > 0) {
+      const card = (newState.remainingDeck).shift()!;
+      newState.hand = [...newState.hand, { card, originalIndex: uniqueIdCounter.current++ }];
       logMsg += t['msg_draw'].replace('{card}', card.name);
     }
-    addLog(logMsg);
+    newState.logs.push(logMsg);
+    applyStateSnapshot(newState);
   };
 
   const handlePlayCard = (index: number) => {
     saveHistory();
-    const newState = getCurrentStateSnapshot();
+    let newState = getCurrentStateSnapshot();
     
     // Remove from hand
     const cardItem = newState.hand[index];
@@ -445,10 +459,22 @@ const App: React.FC = () => {
       case 254: // Innervate
         newState.manaThisTurn += 1; break;
 
+      case 2785: // Astral Communion
+        newState.hand = [];
+        if (newState.totalMana < manaMaximum) {
+          newState.totalMana = Math.min(newState.totalMana + 10, manaMaximum);
+          newState.manaThisTurn = Math.min(newState.manaThisTurn + 10, newState.totalMana);
+        }
+        break;
       case 60278: // Lorekeeper Polkelt
       case 78144: // Order in the Court
         newState.remainingDeck = newState.remainingDeck.sort((a, b) => (b.cost - a.cost));
         newState.logs.push(t['msg_reoder_desc']);
+        break;
+
+      case 71781: // Sir Finley, Sea Guide
+        newState = swapAction(newState, () => uniqueIdCounter.current++);
+        newState.logs.push(t['msg_swap'].replace('{count}', newState.hand.length.toString()));
         break;
 
       case 102148: // Fracking
@@ -464,7 +490,7 @@ const App: React.FC = () => {
     applyStateSnapshot(newState);
   };
 
-  const HIGHLIGHT_DBFIDS = new Set([60278, 78144, 102148, 117697, 120746]);
+  const HIGHLIGHT_DBFIDS = new Set([2785, 60278, 71781, 78144, 102148, 117697, 120746]);
 
   const handleShuffle = () => {
     if (remainingDeck.length === 0) return;
@@ -472,37 +498,6 @@ const App: React.FC = () => {
     setRemainingDeck(prev => shuffleArray([...prev]));
     addLog(t['msg_shuffle']);
   }
-
-  const handleSwap = () => {
-    if (hand.length === 0) return; // Requirement implies X is hand length. If 0, nothing to swap.
-    saveHistory();
-
-    const currentHand = [...hand];
-    const currentDeck = [...remainingDeck];
-
-    // X = hand size. Swap X cards.
-    // If deck has fewer than X, swap all available deck cards.
-    const count = Math.min(currentHand.length, currentDeck.length);
-
-    // Deck Cards -> Hand (Bottom 'count' cards)
-    const newHandCardsFromDeck = currentDeck.splice(currentDeck.length - count, count);
-
-    // Hand Cards -> Deck (Append to Bottom)
-    const cardsFromHand = currentHand.map(h => h.card);
-
-    // New Deck = Old Deck (minus bottom) + Old Hand
-    const newDeck = [...currentDeck, ...cardsFromHand];
-
-    // New Hand = Cards from Deck
-    const newHand: HandCard[] = newHandCardsFromDeck.map(card => ({
-        card,
-        originalIndex: uniqueIdCounter.current++
-    }));
-
-    setHand(newHand);
-    setRemainingDeck(newDeck);
-    addLog(t['msg_swap'].replace('{count}', count.toString()));
-  };
 
   // --- Generic Interaction Handler ---
   
@@ -996,7 +991,7 @@ const App: React.FC = () => {
                     {/* Hand Count and Mana Spent Info */}
                     <div className="flex justify-between items-center w-full px-2 mb-2 text-cyan-400 font-mono text-sm font-bold tracking-wider">
                         <span>{t['hand_count']}: {hand.length}</span>
-                        <span>{t['mana_this_turn']}: {manaThisTurn}</span>
+                        <span>{t['mana_this_turn']}: {manaThisTurn} / {totalMana}</span>
                     </div>
 
                     {/* Action Dashboard */}
@@ -1030,11 +1025,10 @@ const App: React.FC = () => {
                                   {t['shuffle']}
                               </button>
                               <button 
-                                  onClick={handleSwap}
-                                  disabled={hand.length === 0}
+                                  onClick={handleRamp}
                                   className="flex-1 bg-[#5e2f0d] hover:bg-[#8b4513] disabled:opacity-30 text-white text-xs font-bold rounded shadow-[0_1px_0_#3d1f08] active:shadow-none active:translate-y-0.5"
                               >
-                                  {t['swap']}
+                                  {t['ramp']}
                               </button>
                             </div>
                         </div>
